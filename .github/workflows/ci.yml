@@ -1,0 +1,15 @@
+name: Farcaster safety checks
+on: [push, pull_request]
+jobs:
+  source:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Ensure voting fails closed
+        run: |
+          grep -q "Verified voting is not configured" pages/api/vote.ts
+          grep -q "Unverified frame action" pages/api/vote.ts
+          ! grep -q "fid = req.body?.untrustedData?.fid" pages/api/vote.ts
+          grep -q 'newPoll);' app/actions.tsx
+      - name: Confirm dependencies have not been falsely marked as tested
+        run: test -s package-lock.json && test -s README.md
