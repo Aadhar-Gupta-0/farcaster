@@ -1,0 +1,7 @@
+{
+    "functions": {
+      "pages/api/vote.ts": {
+        "maxDuration": 60
+      }
+    }
+  }
