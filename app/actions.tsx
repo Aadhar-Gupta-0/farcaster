@@ -15,7 +15,12 @@ export async function savePoll(poll: Poll, formData: FormData) {
     option3: formData.get("option3") as string,
     option4: formData.get("option4") as string,
   }
-  await kv.hset(`poll:${poll.id}`, poll);
+  const fields = [newPoll.title, newPoll.option1, newPoll.option2, newPoll.option3, newPoll.option4];
+  if (fields.some(value => typeof value !== 'string' || value.length > 150) ||
+      !newPoll.title.trim() || !newPoll.option1.trim() || !newPoll.option2.trim()) {
+    throw new Error("A poll requires a title and two choices (max 150 characters).");
+  }
+  await kv.hset(`poll:${poll.id}`, newPoll);
   await kv.expire(`poll:${poll.id}`, POLL_EXPIRY);
   await kv.zadd("polls_by_date", {
     score: Number(newPoll.created_at),
@@ -34,5 +39,5 @@ export async function votePoll(poll: Poll, optionIndex: number) {
 }
 
 export async function redirectToHome() {
-  redirect("http://ethglobal.com");
+  redirect("/");
 }
