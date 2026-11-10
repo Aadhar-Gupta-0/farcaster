@@ -1,0 +1,120 @@
+name: Import and improve Farcaster
+on:
+  push:
+    branches: [main]
+    paths: ['.github/workflows/bootstrap.yml']
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  upgrade:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Import pinned source and verify TypeScript
+        shell: bash
+        run: |
+          set -euo pipefail
+          git clone --quiet --depth 1 --branch main 'https://github.com/ethglobal/farcaster-poll.git' "$RUNNER_TEMP/upstream"
+          test "$(git -C "$RUNNER_TEMP/upstream" rev-parse HEAD)" = "9cb85306aa2f865c888492d249562d4999c446c1"
+          rsync -a --exclude '.git' --exclude '.github' --exclude '.env' "$RUNNER_TEMP/upstream/" ./
+          python - <<'PY'
+          from pathlib import Path
+          p=Path("pages/api/vote.ts")
+          s=p.read_text()
+          def once(a,b):
+           global s
+           if s.count(a)!=1:raise RuntimeError('Unexpected source for vote patch: '+a[:80])
+           s=s.replace(a,b)
+          once("const client = HUB_URL ? getSSLHubRpcClient(HUB_URL) : undefined;",
+               "const client = HUB_URL ? getSSLHubRpcClient(HUB_URL) : undefined;")
+          once("""            if (!pollId) {
+                          return res.status(400).send('Missing poll ID');
+                      }""",
+          """            if (typeof pollId !== 'string' || !/^[a-zA-Z0-9-]{1,64}$/.test(pollId)) {
+                          return res.status(400).send('Invalid poll ID');
+                      }
+                      // Reject unverified vote payloads; never trust an arbitrary fid from request JSON.
+                      if (!client || !process.env['HOST']) {
+                          return res.status(503).send('Verified voting is not configured');
+                      }""")
+          once("""            // If HUB_URL is not provided, don't validate and fall back to untrusted data
+                      if (client) {
+                          buttonId = validatedMessage?.data?.frameActionBody?.buttonIndex || 0;
+                          fid = validatedMessage?.data?.fid || 0;
+                      } else {
+                          buttonId = req.body?.untrustedData?.buttonIndex || 0;
+                          fid = req.body?.untrustedData?.fid || 0;
+                      }""",
+          """            // Use only identities validated by the configured Farcaster hub.
+                      if (!validatedMessage) return res.status(401).send('Unverified frame action');
+                      buttonId = validatedMessage?.data?.frameActionBody?.buttonIndex || 0;
+                      fid = validatedMessage?.data?.fid || 0;""")
+          once("""if (validatedMessage && !urlString.startsWith(process.env['HOST'] || '')) {""",
+          """if (validatedMessage && new URL(urlString).origin !== new URL(process.env['HOST']!).origin) {""")
+          once("const voteExists = await kv.sismember", "const voteExists = await kv.sismember")
+          p.write_text(s)
+          p=Path("app/actions.tsx");s=p.read_text()
+          s=s.replace("await kv.hset(\`poll:\${poll.id}\`, poll);","await kv.hset(\`poll:\${poll.id}\`, newPoll);")
+          s=s.replace("score: Number(poll.created_at),","score: Number(newPoll.created_at),")
+          s=s.replace("""  await kv.hset(\`poll:\${poll.id}\`, newPoll);""",
+          """  const fields = [newPoll.title, newPoll.option1, newPoll.option2, newPoll.option3, newPoll.option4];
+            if (fields.some(value => typeof value !== 'string' || value.length > 150) ||
+                !newPoll.title.trim() || !newPoll.option1.trim() || !newPoll.option2.trim()) {
+              throw new Error("Poll title and first two choices are required (max 150 characters each).");
+            }
+            await kv.hset(\`poll:\${poll.id}\`, newPoll);""")
+          p.write_text(s)
+          Path("README.md").write_text("""# farcaster — Verified Polls
+          
+          A Farcaster Frame polling experiment with poll creation, four voting options, results and Vercel KV storage.
+          
+          ## Security and correctness improvements
+          - **Fail-closed voting:** the vote handler requires \`HUB_URL\` and \`HOST\`; arbitrary \`untrustedData.fid\` values are no longer accepted as votes.
+          - Validates frame action host origin rather than checking a potentially spoofable string prefix.
+          - Bounds and validates poll IDs before constructing storage keys.
+          - Persists the normalized poll form fields (the prior server action wrote the unmodified poll stub).
+          - Requires a title and two non-empty options; limits each field length to 150 characters.
+          
+          ## Setup
+          \`\`\`bash
+          npm ci
+          npm run dev
+          \`\`\`
+          Copy \`.env.example\` to \`.env.local\` and configure Vercel KV, your public \`HOST\` URL, and a trusted Farcaster \`HUB_URL\`.
+          
+          **Unconfigured hub = voting unavailable.** This is intentional: a visual demo must not claim votes are authenticated when they are not. The application is based on an early Farcaster Frames example; verify API compatibility before using it in production.
+          
+          ## Caveats
+          - Additional rate limiting, replay protection, poll access controls, KV atomic vote transactions and automated integration tests remain necessary before public use.
+          - Existing Farcaster Frames protocol versions have evolved; validate current client compatibility before deployment.
+          - Original MIT license and upstream attribution are retained.
+          
+          Adapted from [ethglobal/farcaster-poll](https://github.com/ethglobal/farcaster-poll); maintained as \`Aadhar-Gupta-0/farcaster\`.
+          """)
+          Path(".github/workflows/ci.yml").parent.mkdir(parents=True,exist_ok=True)
+          Path(".github/workflows/ci.yml").write_text("""name: Farcaster TypeScript checks
+          on: [push, pull_request]
+          jobs:
+            check:
+              runs-on: ubuntu-latest
+              steps:
+                - uses: actions/checkout@v4
+                - uses: actions/setup-node@v4
+                  with:
+                    node-version: '20'
+                - run: npm ci --no-audit --no-fund
+                - run: npx tsc --noEmit
+          """)
+          
+          PY
+          npm ci --no-audit --no-fund
+          npx tsc --noEmit
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git commit -m 'Import Farcaster polling and enforce verified votes'
+          git push origin HEAD:main
