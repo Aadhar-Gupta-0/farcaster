@@ -34,10 +34,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
                 let urlBuffer = validatedMessage?.data?.frameActionBody?.url || [];
                 const urlString = Buffer.from(urlBuffer).toString('utf-8');
                 if (validatedMessage && new URL(urlString).origin !== new URL(process.env['HOST']!).origin) {
-                    return res.status(400).send(`Invalid frame url: ${urlBuffer}`);
+                    return res.status(400).send('Frame URL did not match the configured app origin');
                 }
             } catch (e)  {
-                return res.status(400).send(`Failed to validate message: ${e}`);
+                return res.status(400).send('Frame message validation failed');
             }
 
             let buttonId = 0, fid = 0;
@@ -100,8 +100,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       </html>
     `);
         } catch (error) {
-            console.error(error);
-            res.status(500).send('Error generating image');
+            console.error('Farcaster vote handler failed');
+            res.status(500).send('Unable to process vote');
         }
     } else {
         // Handle any non-POST requests
